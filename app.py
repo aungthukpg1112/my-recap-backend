@@ -16,11 +16,36 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 jobs = {}
 
 def get_duration(path):
-    r = subprocess.run(
-        ['ffprobe','-v','quiet','-print_format','json','-show_format',path],
-        capture_output=True, text=True
-    )
-    return float(json.loads(r.stdout)['format']['duration'])
+    try:
+        r = subprocess.run(
+            ['ffprobe','-v','quiet','-print_format','json','-show_format',path],
+            capture_output=True, text=True
+        )
+        data = json.loads(r.stdout)
+        return float(data['format']['duration'])
+    except Exception:
+        try:
+            r = subprocess.run(
+                ['ffprobe','-v','quiet','-print_format','json','-show_streams',path],
+                capture_output=True, text=True
+            )
+            data = json.loads(r.stdout)
+            for stream in data.get('streams', []):
+                if 'duration' in stream:
+                    return float(stream['duration'])
+        except Exception:
+            pass
+        return 600.0
+
+
+def convert_to_mp4(input_path, output_path):
+    result = subprocess.run([
+        'ffmpeg', '-y', '-i', input_path,
+        '-c:v', 'libx264', '-preset', 'fast',
+        '-c:a', 'aac',
+        output_path
+    ], capture_output=True)
+    return result.returncode == 0
 
 def get_audio_peaks(audio_path, job_dir):
     wav_path = os.path.join(job_dir, 'audio_mono.wav')
@@ -327,9 +352,14 @@ def upload():
             cf = request.files.get(f'chunk_{i}')
             if cf is None:
                 break
-            chunk_path = os.path.join(job_dir, f'chunk_{i}.webm')
-            cf.save(chunk_path)
-            chunk_files.append(chunk_path)
+            webm_path = os.path.join(job_dir, f'chunk_{i}.webm')
+            mp4_path = os.path.join(job_dir, f'chunk_{i}.mp4')
+            cf.save(webm_path)
+            # Convert webm to mp4 for ffmpeg compatibility
+            if convert_to_mp4(webm_path, mp4_path):
+                chunk_files.append(mp4_path)
+            else:
+                chunk_files.append(webm_path)
             i += 1
 
         # Also check for single 'video' field (backward compat)
